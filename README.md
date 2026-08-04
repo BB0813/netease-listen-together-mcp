@@ -171,3 +171,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
 - CDP 调试端口只监听 `127.0.0.1`；远程使用时通过受保护的隧道连接。
 - 网易云客户端升级后，内部模块号或 action 可能变化；如果桌面控制失效，需要重新确认对应模块。
 - VPS IP 与常用登录 IP 差异较大时，可能需要重新登录或更新 Cookie。
+
+## License
+
+[MIT](LICENSE)
