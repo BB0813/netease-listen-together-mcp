@@ -52,22 +52,31 @@
   </tr>
 </table>
 
-## 环境要求与适配范围
+## 环境要求
+
+### 通用（所有模式）
+
+- Python 3.9+
+- 网易云已登录账号的 Cookie（`MUSIC_U`、`__csrf`）
 
 ### 桌面客户端模式
 
-- macOS
-- Python 3.9+
-- Node.js（需提供全局 `WebSocket`；当前在 Node.js 24 验证）
+- macOS（当前已验证；Windows Electron 客户端需要另行适配）
 - 网易云音乐官方桌面客户端
+- Node.js（需提供全局 `WebSocket`；当前在 Node.js 24 验证）
+- 网易云客户端需启用 CDP 调试端口
 
-### 纯 HTTP 模式
+### HTTP API 模式（Linux / VPS）
 
-- Python 3.9+
-- 网易云已登录账号的 Cookie（`MUSIC_U` 和 `__csrf`）
-- 不需要 Node.js、浏览器或网易云桌面客户端
+无需桌面客户端，可在 Linux、VPS 等无桌面环境运行。
 
-### 实测版本
+- 无需 Node.js
+- 无需浏览器或 CDP
+- 支持搜索、歌曲详情、歌词、歌单、评论和私信等 HTTP API 能力
+- 可接受已有一起听邀请，并在房间中读取列表、加歌和切歌
+- 无法仅依赖 HTTP API 创建并维持可正常加入的一起听房间
+
+## 实测环境与适配范围
 
 下面只是当前版本的实测环境，不代表只能在相同环境运行：
 
