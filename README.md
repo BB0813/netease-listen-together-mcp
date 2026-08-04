@@ -27,6 +27,28 @@
 - ✉️ 支持网易云私信
 - ☁️ 支持本机与 VPS，提供无桌面的纯 HTTP 一起听方案
 
+### 功能展示
+
+点击图片可查看原图。
+
+<table>
+  <tr>
+    <td align="center"><a href="screenshots/listen-together-invite.jpg"><img src="screenshots/listen-together-invite.jpg" width="260" alt="AI 发起原生一起听邀请"></a><br><sub>AI 发起原生一起听邀请</sub></td>
+    <td align="center"><a href="screenshots/listen-together-room.jpg"><img src="screenshots/listen-together-room.jpg" width="260" alt="AI 进入同一个一起听房间"></a><br><sub>进入同一个一起听房间</sub></td>
+    <td align="center"><a href="screenshots/private-message-listen-together.jpg"><img src="screenshots/private-message-listen-together.jpg" width="260" alt="私信中的一起听邀请卡片"></a><br><sub>私信中的一起听邀请</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><a href="screenshots/lock-screen-invite-notification.jpg"><img src="screenshots/lock-screen-invite-notification.jpg" width="260" alt="锁屏收到一起听邀请通知"></a><br><sub>锁屏收到一起听邀请</sub></td>
+    <td align="center"><a href="screenshots/private-message-notification.jpg"><img src="screenshots/private-message-notification.jpg" width="260" alt="锁屏收到网易云私信通知"></a><br><sub>锁屏收到网易云私信</sub></td>
+    <td align="center"><a href="screenshots/ai-created-room-chat.jpg"><img src="screenshots/ai-created-room-chat.jpg" width="260" alt="AI 创建原生一起听房间"></a><br><sub>AI 创建原生一起听房间</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><a href="screenshots/current-lyric-position.jpg"><img src="screenshots/current-lyric-position.jpg" width="260" alt="AI 准确定位当前歌词"></a><br><sub>准确定位当前歌词</sub></td>
+    <td align="center"><a href="screenshots/ai-comment-confirmation.jpg"><img src="screenshots/ai-comment-confirmation.jpg" width="260" alt="AI 确认并发布歌曲评论"></a><br><sub>确认并发布歌曲评论</sub></td>
+    <td align="center"><a href="screenshots/song-comment-published.jpg"><img src="screenshots/song-comment-published.jpg" width="260" alt="歌曲评论发布成功"></a><br><sub>歌曲评论发布成功</sub></td>
+  </tr>
+</table>
+
 ## 实测环境与适配范围
 
 下面只是当前版本的实测环境，不代表只能在相同环境运行：
