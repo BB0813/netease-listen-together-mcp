@@ -179,28 +179,40 @@ HTTP API 与 CDP 分别承担服务端账号能力和桌面客户端控制，不
 
 ## 主要工具
 
-### 播放、状态与歌词
+### 搜索、播放与状态
 
 - `play_music`
 - `netease_playback_control`
 - `get_current_listening_context`
 - `netease_status`
+- `netease_playlist_auth_status`
 - `netease_song_detail`
 - `netease_lyrics`
 
+### 歌单、收藏与推荐
+
+- `create_playlist`
+- `add_to_playlist`
+- `remove_from_playlist`
+- `list_my_playlists`
+- `get_playlist_songs`
+- `get_play_history`
+- `like_song`
+- `daily_recommend`
+
 ### 一起听
 
+- `netease_launch`
 - `netease_listen_together_capabilities`
 - `netease_listen_together_invite`
 - `netease_listen_together_control`
 - `netease_listen_together_leave`
 
-### 评论、私信与账号
+### 评论与私信
 
 - `get_song_comments`
 - `send_song_comment`
 - `send_private_message`
-- 歌单、喜欢、播放历史和每日推荐等基础工具
 
 ## 验证
 
