@@ -1,4 +1,0 @@
-[mcp_servers.netease-listen-together]
-command = "/usr/bin/python3"
-args = ["-B", "/path/to/netease-listen-together-mcp/server.py"]
-env_vars = ["NETEASE_COOKIE", "NETEASE_LISTEN_TOGETHER_ACCEPTOR_ID"]
