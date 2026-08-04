@@ -38,7 +38,7 @@
   <tr>
     <td align="center"><a href="screenshots/listen-together-invite.jpg"><img src="screenshots/listen-together-invite.jpg" width="260" alt="AI 发起原生一起听邀请"></a><br><sub>AI 发起原生一起听邀请</sub></td>
     <td align="center"><a href="screenshots/listen-together-room.jpg"><img src="screenshots/listen-together-room.jpg" width="260" alt="AI 进入同一个一起听房间"></a><br><sub>进入同一个一起听房间</sub></td>
-    <td align="center"><a href="screenshots/private-message-listen-together.jpg"><img src="screenshots/private-message-listen-together.jpg" width="260" alt="私信中的一起听邀请卡片"></a><br><sub>私信中的一起听邀请</sub></td>
+    <td align="center"><a href="screenshots/private-message-listen-together.jpg"><img src="screenshots/private-message-listen-together.jpg" width="260" alt="私信中的一起听邀请卡片"></a><br><sub>给用户私信</sub></td>
   </tr>
   <tr>
     <td align="center"><a href="screenshots/lock-screen-invite-notification.jpg"><img src="screenshots/lock-screen-invite-notification.jpg" width="260" alt="锁屏收到一起听邀请通知"></a><br><sub>锁屏收到一起听邀请</sub></td>
