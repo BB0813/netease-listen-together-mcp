@@ -4,7 +4,7 @@
 
 ## 项目来源与新增能力
 
-本项目的部分账号、歌单和推荐等基础命令参考了 [`Vael-KY/netease-music-mcp`](https://github.com/Vael-KY/netease-music-mcp) 和 [`tianyupaipai-cmd/netease-music-mcp`](https://github.com/tianyupaipai-cmd/netease-music-mcp)，并从两者中选取、改写了少量基础命令。
+本项目的歌曲搜索、歌单、喜欢、播放历史和每日推荐等基础命令参考了 [`Vael-KY/netease-music-mcp`](https://github.com/Vael-KY/netease-music-mcp) 和 [`tianyupaipai-cmd/netease-music-mcp`](https://github.com/tianyupaipai-cmd/netease-music-mcp)，并从两者中选取、改写了少量基础命令。
 
 在这些基础命令之上，本项目补齐了五类能力：
 
