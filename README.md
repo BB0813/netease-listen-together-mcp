@@ -81,7 +81,7 @@
 - 无法仅依赖 HTTP API 创建并维持可正常加入的一起听房间
 
 > [!IMPORTANT]
-> 当前仓库中的 `server.py` 主要实现 macOS 桌面客户端 + CDP 方案，同时包含部分网易云 HTTP 请求封装。[VPS-HTTP.md](VPS-HTTP.md) 主要补充 VPS 无桌面环境下的一起听 HTTP 流程，包括接受已有邀请进入房间、房间状态同步和切歌相关接口。
+> 当前仓库默认实现为 macOS 桌面客户端 + CDP 方案。VPS 无桌面环境使用时，需要在克隆仓库后参考 [VPS-HTTP.md](VPS-HTTP.md) 对一起听相关功能进行 HTTP API 适配。
 
 两种模式的实现路径不同：
 - 桌面客户端模式通过 CDP 调用网易云客户端内部 action，由客户端完成一起听状态同步。
