@@ -33,23 +33,66 @@
 
 ## 4. 核心流程与代码
 
-注意：本文中的接口调用示例使用封装函数展示流程，并非直接发送给网易云接口的原始 HTTP 请求 body。
+下面先给出各步骤共用的最底层 HTTP 请求函数。读取房间、同步列表和切歌的具体封装分别放在对应小节，不提前重复。
 
-实际请求由封装函数负责补充 Cookie、csrf_token、roomId 等必要参数，并按照网易云接口要求构造完整请求。
-请勿直接将示例中的参数对象作为 HTTP body 发送。
+### 4.0 通用 HTTP 请求函数
+
+网易云这几个接口接收的是 `application/x-www-form-urlencoded` 表单，不是 JSON body。两个 `command/report` 接口的具体封装见 4.4 和 4.5。
+
+- 表单外层只放 `roomId`、`commandInfo` 和 `csrf_token`；
+- `commandInfo` 的值才是序列化后的 JSON 字符串；
+- **不要**把 `commandType`、`targetSongId`、`clientSeq` 等字段平铺到表单外层，否则通常返回 HTTP 400。
+
+```python
+import json
+import os
+import time
+import urllib.parse
+import urllib.request
+
+COOKIE = os.environ["NETEASE_COOKIE"]
+
+
+def get_csrf():
+    for part in COOKIE.split(";"):
+        part = part.strip()
+        if part.startswith("__csrf="):
+            return part.split("=", 1)[1]
+    return ""
+
+
+def netease_request(path, form):
+    csrf = get_csrf()
+    body = urllib.parse.urlencode({**form, "csrf_token": csrf}).encode()
+    request = urllib.request.Request(
+        "https://music.163.com" + path
+        + "?csrf_token=" + urllib.parse.quote(csrf),
+        data=body,
+        headers={
+            "Cookie": COOKIE,
+            "Referer": "https://music.163.com/",
+            "User-Agent": "Mozilla/5.0",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        return json.loads(response.read())
+
+
+```
+
+`room_id` 必须使用当前一起听房间的真实 `roomId`：可从接受邀请的返回值、已有房间状态或客户端当前一起听状态取得。不要把示例值写死，也不要新建另一个房间来替代当前房间。
+
 ### 4.1 接受邀请
 
 从有效邀请中取得 `room_id` 和 `inviter_id`，调用接受接口：
 
 ```python
-csrf = get_csrf()
 result = netease_request(
-    "https://music.163.com/api/listen/together/play/invitation/accept"
-    "?csrf_token=" + urllib.parse.quote(csrf),
+    "/api/listen/together/play/invitation/accept",
     {
         "roomId": str(room_id),
         "inviterId": str(inviter_id),
-        "csrf_token": csrf,
     },
 )
 accepted = result.get("code") == 200
@@ -60,24 +103,45 @@ accepted = result.get("code") == 200
 通过 `/sync/playlist/get` 读取当前播放命令、列表版本和播放列表：
 
 ```python
-state = get_room_state(room_id)               # /sync/playlist/get
-former = state.play_command["targetSongId"]   # 当前房间目标歌曲
-seq = int(state.play_command.get("clientSeq", 0))
+def get_room_state(room_id):
+    result = netease_request(
+        "/api/listen/together/sync/playlist/get",
+        {"roomId": str(room_id)},
+    )
+    if result.get("code") != 200:
+        raise RuntimeError(result)
+    return result["data"]
+
+
+state = get_room_state(room_id)               # /sync/playlist/get 的 data
+play_command = state["playCommand"]
+playlist = state["playlist"]
+
+former = str(play_command["targetSongId"])   # 当前房间目标歌曲
+seq = int(play_command.get("clientSeq", 0))
+versions = [dict(v) for v in playlist.get("version", [])]
+play_mode = playlist.get("playMode", "ORDER_LOOP")
+
+display_items = playlist.get("displayList", {}).get("result", [])
+display_list = [
+    str(item.get("songId") if isinstance(item, dict) else item)
+    for item in display_items
+]
+current_index = display_list.index(former) if former in display_list else 0
 ```
 
-从 `state` 中还需要：
+这里得到的关键变量是：
 
-- `state.version`：列表版本（每个用户各持一个版本号）
-- `state.display_list`：房间展示列表
-- `state.play_mode`：播放模式
-- `state.current_index`：当前歌曲下标
+- `versions`：列表版本（每个用户各持一个版本号）
+- `display_list`：房间展示列表中的歌曲 ID
+- `play_mode`：播放模式
+- `current_index`：当前歌曲下标
 
 ### 4.3 version 递增逻辑（关键踩坑点）
 
 `version` 不能原样复用服务器返回值。必须**递增当前发送账号对应的版本号**，否则服务器可能返回 `200`，但另一端会把它当作旧列表而不重新同步：
 
 ```python
-versions = [dict(v) for v in state.version]
 for v in versions:
     if str(v.get("userId")) == str(my_user_id):
         v["version"] = int(v.get("version", 0)) + 1
@@ -95,15 +159,30 @@ else:
 目标歌曲不在 `display_list` 时，必须先递增版本发送 `ADD`，**等待另一端同步后**再发送 `GOTO`：
 
 ```python
+def report_list(room_id, command):
+    result = netease_request(
+        "/api/listen/together/sync/list/command/report",
+        {
+            "roomId": str(room_id),
+            "commandInfo": json.dumps(
+                command, ensure_ascii=False, separators=(",", ":")
+            ),
+        },
+    )
+    if result.get("code") != 200 or not result.get("data", {}).get("result"):
+        raise RuntimeError(result)
+    return result
+
+
 target = str(target_song_id)
 
-if target not in state.display_list:
+if target not in display_list:
     report_list(room_id, {                    # /sync/list/command/report
         "commandType": "ADD",
         "version": versions,                  # 递增后的版本
-        "playMode": state.play_mode,
+        "playMode": play_mode,
         "anchorSongId": former,
-        "anchorPosition": state.current_index,
+        "anchorPosition": current_index,
         "randomList": [target],
         "displayList": [target],
     })
@@ -115,6 +194,22 @@ if target not in state.display_list:
 列表同步完成后，发送切歌命令：
 
 ```python
+def report_play(room_id, command):
+    result = netease_request(
+        "/api/listen/together/play/command/report",
+        {
+            "roomId": str(room_id),
+            # 关键：GOTO 命令必须序列化后放入 commandInfo。
+            "commandInfo": json.dumps(
+                command, ensure_ascii=False, separators=(",", ":")
+            ),
+        },
+    )
+    if result.get("code") != 200 or not result.get("data", {}).get("result"):
+        raise RuntimeError(result)
+    return result
+
+
 report_play(room_id, {                        # /play/command/report
     "commandType": "GOTO",
     "progress": 0,
