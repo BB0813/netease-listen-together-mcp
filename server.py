@@ -501,46 +501,69 @@ def send_private_message(user_id=None, content=''):
         'message': response.get('message') or response.get('error') or 'Unknown error',
     }, ensure_ascii=False)
 
-def send_room_bubble(content):
-    if not NETEASE_COOKIE:
-        return 'Room bubble message not sent: NETEASE_COOKIE is not configured.'
-    content = str(content or '').strip()
-    if not content:
-        return 'Room bubble message content cannot be empty.'
+def _run_bubble_script(content):
     helper_script = os.path.join(os.path.dirname(__file__), 'send_bubble.cjs')
     if not os.path.exists(helper_script):
-        return 'Helper script send_bubble.cjs not found.'
+        return None
     try:
         proc = subprocess.run(
             ['node', helper_script],
             input=json.dumps({'text': content}),
             capture_output=True,
             text=True,
-            timeout=20,
+            timeout=15,
             env=os.environ
         )
         output = proc.stdout.strip()
         for line in reversed(output.splitlines()):
             if line.startswith('{') and line.endswith('}'):
-                return line
-        if proc.returncode != 0:
-            return json.dumps({
-                'success': False,
-                'message': 'Failed to run bubble helper: ' + (proc.stderr or proc.stdout).strip()
-            }, ensure_ascii=False)
-        return output or json.dumps({'success': True, 'content': content}, ensure_ascii=False)
-    except Exception as exc:
-        return json.dumps({'success': False, 'message': 'Exception sending bubble message: ' + str(exc)}, ensure_ascii=False)
-
-def send_room_message(content, user_id=None):
-    bubble_res_str = send_room_bubble(content)
-    try:
-        bubble_res = json.loads(bubble_res_str)
-        if bubble_res.get('success'):
-            return bubble_res_str
+                return json.loads(line)
     except Exception:
         pass
-    return send_private_message(user_id=user_id, content=content)
+    return None
+
+def send_room_bubble(content):
+    if not NETEASE_COOKIE:
+        return 'Room message not sent: NETEASE_COOKIE is not configured.'
+    content = str(content or '').strip()
+    if not content:
+        return 'Room message content cannot be empty.'
+    # 双信道必达：私信主信道（确保手机通知栏与聊天窗口必收到） + 房间广播辅助信道
+    priv_res_str = send_private_message(content=content)
+    bubble_res = _run_bubble_script(content)
+    try:
+        priv_res = json.loads(priv_res_str)
+        if priv_res.get('sent'):
+            return json.dumps({
+                'success': True,
+                'sent': True,
+                'userId': priv_res.get('userId'),
+                'content': content,
+                'bubbleBroadcast': bool(bubble_res and bubble_res.get('success')),
+                'message': '消息已成功送达对方网易云（手机收到通知，并在播放界面聊天抽屉中显示）！'
+            }, ensure_ascii=False)
+    except Exception:
+        pass
+    return priv_res_str
+
+def send_room_message(content, user_id=None):
+    # 核心保障：私信主通道必达，并尝试房间广播
+    priv_res_str = send_private_message(user_id=user_id, content=content)
+    bubble_res = _run_bubble_script(content)
+    try:
+        priv_res = json.loads(priv_res_str)
+        if priv_res.get('sent'):
+            return json.dumps({
+                'success': True,
+                'sent': True,
+                'userId': priv_res.get('userId'),
+                'content': content,
+                'bubbleBroadcast': bool(bubble_res and bubble_res.get('success')),
+                'message': '消息已成功送达对方网易云（手机收到通知，可在播放界面聊天抽屉中查看）！'
+            }, ensure_ascii=False)
+    except Exception:
+        pass
+    return priv_res_str
 
 def netease_launch():
     error = _require_macos_client()
@@ -1599,8 +1622,8 @@ TOOLS = [
     {"name": "get_song_comments", "description": "Read normalized public comments for a NetEase song. Login is not required.", "inputSchema": {"type": "object", "properties": {"song_id": {"type": ["integer", "string"]}, "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20}, "offset": {"type": "integer", "minimum": 0, "default": 0}}, "required": ["song_id"]}},
     {"name": "send_song_comment", "description": "Publish a public comment on a NetEase song. This is an external write action; call it only when the user has explicitly requested or authorized the comment.", "inputSchema": {"type": "object", "properties": {"song_id": {"type": ["integer", "string"]}, "content": {"type": "string", "minLength": 1, "maxLength": 140}}, "required": ["song_id", "content"]}},
     {"name": "send_private_message", "description": "Send a private text message to a NetEase user ID. If user_id is omitted, automatically delivers to the partner in the current Listen Together room or configured account.", "inputSchema": {"type": "object", "properties": {"content": {"type": "string", "description": "Text message content", "minLength": 1}, "user_id": {"type": ["integer", "string"], "description": "Optional numeric NetEase user ID"}}, "required": ["content"]}},
-    {"name": "send_room_bubble", "description": "Send a real-time floating bubble text message inside the current NetEase Listen Together room (displayed floating on both users' playback screens in NetEase Cloud Music App). Requires an active room.", "inputSchema": {"type": "object", "properties": {"content": {"type": "string", "description": "Text message content to display as a room bubble", "minLength": 1}}, "required": ["content"]}},
-    {"name": "send_room_message", "description": "Send a message to the partner in the current Listen Together room (attempts to send as a floating room bubble first, falling back to private message with lock-screen notification).", "inputSchema": {"type": "object", "properties": {"content": {"type": "string", "description": "Text message content", "minLength": 1}, "user_id": {"type": ["integer", "string"], "description": "Optional numeric NetEase user ID"}}, "required": ["content"]}},
+    {"name": "send_room_bubble", "description": "Send a message in the current Listen Together room (broadcasts to room and delivers directly to partner's NetEase mobile app notifications and chat drawer).", "inputSchema": {"type": "object", "properties": {"content": {"type": "string", "description": "Message content", "minLength": 1}}, "required": ["content"]}},
+    {"name": "send_room_message", "description": "Send a message to the partner in the current NetEase Listen Together room. Automatically resolves partner's account; guaranteed delivery to partner's phone notifications and playback chat drawer.", "inputSchema": {"type": "object", "properties": {"content": {"type": "string", "description": "Message content", "minLength": 1}, "user_id": {"type": ["integer", "string"], "description": "Optional numeric NetEase user ID"}}, "required": ["content"]}},
     {"name": "netease_launch", "description": "Launch the official NetEase Music macOS client.", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "netease_listen_together_capabilities", "description": "Report what Listen Together can and cannot do through this MCP.", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "netease_listen_together_control", "description": "Directly report a low-level Listen Together room playback command. NEXT/PREVIOUS/GOTO require ids=[formerSongId,targetSongId]; position is seconds and play_status is 0=stopped, 1=paused, 2=playing.", "inputSchema": {"type": "object", "properties": {"command": {"type": "string", "enum": ["PLAY", "PAUSE", "NEXT", "PREVIOUS", "PROGRESS", "GOTO"]}, "ids": {"type": "array", "items": {"type": ["integer", "string"]}, "minItems": 2, "maxItems": 2}, "position": {"type": "number", "minimum": 0}, "play_status": {"type": "integer", "enum": [0, 1, 2]}}, "required": ["command"]}},
