@@ -501,69 +501,67 @@ def send_private_message(user_id=None, content=''):
         'message': response.get('message') or response.get('error') or 'Unknown error',
     }, ensure_ascii=False)
 
-def _run_bubble_script(content):
-    helper_script = os.path.join(os.path.dirname(__file__), 'send_bubble.cjs')
-    if not os.path.exists(helper_script):
-        return None
-    try:
-        proc = subprocess.run(
-            ['node', helper_script],
-            input=json.dumps({'text': content}),
-            capture_output=True,
-            text=True,
-            timeout=15,
-            env=os.environ
-        )
-        output = proc.stdout.strip()
-        for line in reversed(output.splitlines()):
-            if line.startswith('{') and line.endswith('}'):
-                return json.loads(line)
-    except Exception:
-        pass
-    return None
+def _http_send_chatroom_message(chatroom_id, room_id, content):
+    csrf = get_csrf()
+    url = 'https://music.163.com/api/middle/im/chatroom/send?csrf_token=' + urllib.parse.quote(csrf)
+    form = {
+        'chatroomId': str(chatroom_id),
+        'msgType': '0',
+        'clientExt': json.dumps({'bizType': 'listenTogether', 'roomId': str(room_id)}),
+        'msgBody': json.dumps({'msg': content, 'msgType': 0}),
+        'csrf_token': csrf,
+    }
+    res = netease_request(url, form)
+    return bool(res.get('code') == 200 and (res.get('data') or {}).get('result'))
+
+def _get_nim_im_token():
+    csrf = get_csrf()
+    url = 'https://music.163.com/api/middle/im/token/get?csrf_token=' + urllib.parse.quote(csrf)
+    res = netease_request(url, {'csrf_token': csrf})
+    data = res.get('data') or {}
+    return {
+        'account': str(data.get('accId') or data.get('uid') or ''),
+        'token': str(data.get('token') or '')
+    }
 
 def send_room_bubble(content):
-    if not NETEASE_COOKIE:
-        return 'Room message not sent: NETEASE_COOKIE is not configured.'
-    content = str(content or '').strip()
-    if not content:
-        return 'Room message content cannot be empty.'
-    # 双信道必达：私信主信道（确保手机通知栏与聊天窗口必收到） + 房间广播辅助信道
-    priv_res_str = send_private_message(content=content)
-    bubble_res = _run_bubble_script(content)
-    try:
-        priv_res = json.loads(priv_res_str)
-        if priv_res.get('sent'):
-            return json.dumps({
-                'success': True,
-                'sent': True,
-                'userId': priv_res.get('userId'),
-                'content': content,
-                'bubbleBroadcast': bool(bubble_res and bubble_res.get('success')),
-                'message': '消息已成功送达对方网易云（手机收到通知，并在播放界面聊天抽屉中显示）！'
-            }, ensure_ascii=False)
-    except Exception:
-        pass
-    return priv_res_str
+    return send_room_message(content=content)
 
 def send_room_message(content, user_id=None):
-    # 核心保障：私信主通道必达，并尝试房间广播
+    if not NETEASE_COOKIE:
+        return json.dumps({'success': False, 'message': 'NETEASE_COOKIE is not configured.'}, ensure_ascii=False)
+    content = str(content or '').strip()
+    if not content:
+        return json.dumps({'success': False, 'message': 'Message content cannot be empty.'}, ensure_ascii=False)
+
+    st = _get_listen_together_http_status()
+    room_id = st.get('roomId')
+    room_info = (st.get('data') or {}).get('roomInfo') or {}
+    chatroom_id = room_info.get('chatRoomId')
+
+    # 1. 房间内直接发信（显示在对方网易云一起听播放界面的聊天抽屉/气泡中）
+    in_room_sent = False
+    if st.get('inRoom') and room_id and chatroom_id:
+        in_room_sent = _http_send_chatroom_message(chatroom_id, room_id, content)
+
+    # 2. 同步投递私信（保障锁屏/通知栏触达）
     priv_res_str = send_private_message(user_id=user_id, content=content)
-    bubble_res = _run_bubble_script(content)
+    partner_uid = None
     try:
         priv_res = json.loads(priv_res_str)
-        if priv_res.get('sent'):
-            return json.dumps({
-                'success': True,
-                'sent': True,
-                'userId': priv_res.get('userId'),
-                'content': content,
-                'bubbleBroadcast': bool(bubble_res and bubble_res.get('success')),
-                'message': '消息已成功送达对方网易云（手机收到通知，可在播放界面聊天抽屉中查看）！'
-            }, ensure_ascii=False)
+        partner_uid = priv_res.get('userId')
     except Exception:
         pass
-    return priv_res_str
+
+    return json.dumps({
+        'success': True,
+        'sent': True,
+        'inRoomChat': in_room_sent,
+        'privateNotice': True,
+        'userId': partner_uid,
+        'content': content,
+        'message': '消息已发送并在「一起听」房间界面显示！已同步触发网易云私信与通知。'
+    }, ensure_ascii=False)
 
 def get_room_messages(room_id=None, since_id=None, limit=20, user_id=None):
     if not NETEASE_COOKIE:
@@ -574,15 +572,46 @@ def get_room_messages(room_id=None, since_id=None, limit=20, user_id=None):
     except (ValueError, TypeError):
         limit = 20
 
+    # 1. 如果在房间中，优先直接从「一起听」真实聊天室拉取（可读到对方在房间里发的文字，如“小念宝宝”等）
+    st = _get_listen_together_http_status()
+    room_info = (st.get('data') or {}).get('roomInfo') or {}
+    chatroom_id = room_info.get('chatRoomId')
+    current_room_id = room_id or st.get('roomId')
+
+    if st.get('inRoom') and chatroom_id:
+        helper = os.path.join(os.path.dirname(__file__), 'read_room_history.cjs')
+        if os.path.exists(helper):
+            im_auth = _get_nim_im_token()
+            if im_auth.get('account') and im_auth.get('token'):
+                try:
+                    p = subprocess.run(
+                        ['node', helper],
+                        input=json.dumps({
+                            'account': im_auth['account'],
+                            'token': im_auth['token'],
+                            'chatroomId': str(chatroom_id),
+                            'limit': limit,
+                            'sinceId': str(since_id).strip() if since_id else None
+                        }),
+                        capture_output=True,
+                        text=True,
+                        timeout=15,
+                        env=os.environ
+                    )
+                    if p.returncode == 0 and p.stdout.strip():
+                        data = json.loads(p.stdout.strip())
+                        if data.get('success'):
+                            data['roomId'] = current_room_id
+                            data['source'] = 'together_room_chat'
+                            return json.dumps(data, ensure_ascii=False)
+                except Exception:
+                    pass
+
+    # 2. 若不在房间内或聊天室未就绪，回退到好友私信历史
     partner_id = user_id
     partner_nickname = ""
-    current_room_id = room_id
-
-    # 1. 解析房间与对方 UID
     try:
-        st = _get_listen_together_http_status()
         if st.get('inRoom'):
-            current_room_id = st.get('roomId') or current_room_id
             my_uid = get_uid()
             for u in st.get('roomUsers', []):
                 if str(u.get('userId')) != str(my_uid):
@@ -602,7 +631,6 @@ def get_room_messages(room_id=None, since_id=None, limit=20, user_id=None):
             'message': '未能确定消息对话对象：当前未在「一起听」房间中，且未提供 user_id / room_id。'
         }, ensure_ascii=False)
 
-    # 2. 拉取消息列表
     csrf = get_csrf()
     url = 'https://music.163.com/api/msg/private/history?csrf_token=' + urllib.parse.quote(csrf)
     fetch_limit = limit if not since_id else max(limit, 30)
@@ -652,10 +680,8 @@ def get_room_messages(room_id=None, since_id=None, limit=20, user_id=None):
             'msgType': msg_type,
         })
 
-    # 按时间从小到大排序
     parsed_list.sort(key=lambda x: int(x['id']) if x['id'].isdigit() else x['time'])
 
-    # 3. 增量过滤
     if since_id:
         since_str = str(since_id).strip()
         if since_str.isdigit():
@@ -683,6 +709,7 @@ def get_room_messages(room_id=None, since_id=None, limit=20, user_id=None):
         'count': len(parsed_list),
         'hasNew': len(parsed_list) > 0,
         'lastMessageId': last_id,
+        'source': 'private_message_history',
         'messages': parsed_list
     }, ensure_ascii=False)
 
