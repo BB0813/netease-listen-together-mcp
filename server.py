@@ -565,6 +565,130 @@ def send_room_message(content, user_id=None):
         pass
     return priv_res_str
 
+def get_room_messages(room_id=None, since_id=None, limit=20, user_id=None):
+    if not NETEASE_COOKIE:
+        return json.dumps({'success': False, 'message': 'NETEASE_COOKIE is not configured.'}, ensure_ascii=False)
+    try:
+        limit = int(limit or 20)
+        limit = max(1, min(limit, 100))
+    except (ValueError, TypeError):
+        limit = 20
+
+    partner_id = user_id
+    partner_nickname = ""
+    current_room_id = room_id
+
+    # 1. 解析房间与对方 UID
+    try:
+        st = _get_listen_together_http_status()
+        if st.get('inRoom'):
+            current_room_id = st.get('roomId') or current_room_id
+            my_uid = get_uid()
+            for u in st.get('roomUsers', []):
+                if str(u.get('userId')) != str(my_uid):
+                    if not partner_id:
+                        partner_id = str(u.get('userId'))
+                    partner_nickname = u.get('nickname') or ""
+                    break
+    except Exception:
+        pass
+
+    if not partner_id and NETEASE_LISTEN_TOGETHER_ACCEPTOR_ID:
+        partner_id = str(NETEASE_LISTEN_TOGETHER_ACCEPTOR_ID)
+
+    if not partner_id:
+        return json.dumps({
+            'success': False,
+            'message': '未能确定消息对话对象：当前未在「一起听」房间中，且未提供 user_id / room_id。'
+        }, ensure_ascii=False)
+
+    # 2. 拉取消息列表
+    csrf = get_csrf()
+    url = 'https://music.163.com/api/msg/private/history?csrf_token=' + urllib.parse.quote(csrf)
+    fetch_limit = limit if not since_id else max(limit, 30)
+    form = {'userId': str(partner_id), 'limit': str(fetch_limit), 'csrf_token': csrf}
+    res = netease_request(url, form)
+    raw_msgs = res.get('msgs', [])
+
+    my_uid = get_uid()
+    parsed_list = []
+    import datetime
+    for m in raw_msgs:
+        m_id = str(m.get('id', ''))
+        m_time = m.get('time', 0)
+        from_user = m.get('fromUser', {})
+        from_id = from_user.get('userId')
+        from_nick = from_user.get('nickname') or ''
+        if not partner_nickname and str(from_id) == str(partner_id):
+            partner_nickname = from_nick
+
+        is_me = my_uid and (str(from_id) == str(my_uid))
+
+        raw_text = m.get('msg', '')
+        content = ""
+        msg_type = "text"
+        try:
+            obj = json.loads(raw_text)
+            if isinstance(obj, dict):
+                if obj.get('type') == 23:
+                    msg_type = "listen_together_card"
+                    content = (obj.get('generalMsg') or {}).get('inboxBriefContent') or obj.get('msg') or "[一起听邀请卡片]"
+                else:
+                    content = obj.get('msg') or str(obj)
+            else:
+                content = str(obj)
+        except Exception:
+            content = raw_text
+
+        time_str = datetime.datetime.fromtimestamp(m_time / 1000.0).strftime('%Y-%m-%d %H:%M:%S') if m_time else ""
+        parsed_list.append({
+            'id': m_id,
+            'time': m_time,
+            'timeStr': time_str,
+            'sender': 'me' if is_me else 'partner',
+            'fromUserId': from_id,
+            'fromNickname': from_nick,
+            'content': content,
+            'msgType': msg_type,
+        })
+
+    # 按时间从小到大排序
+    parsed_list.sort(key=lambda x: int(x['id']) if x['id'].isdigit() else x['time'])
+
+    # 3. 增量过滤
+    if since_id:
+        since_str = str(since_id).strip()
+        if since_str.isdigit():
+            since_val = int(since_str)
+            parsed_list = [x for x in parsed_list if x['id'].isdigit() and int(x['id']) > since_val]
+        else:
+            found_idx = -1
+            for idx, x in enumerate(parsed_list):
+                if x['id'] == since_str:
+                    found_idx = idx
+                    break
+            if found_idx != -1:
+                parsed_list = parsed_list[found_idx + 1:]
+
+    if len(parsed_list) > limit:
+        parsed_list = parsed_list[-limit:]
+
+    last_id = parsed_list[-1]['id'] if parsed_list else (str(since_id) if since_id else None)
+
+    return json.dumps({
+        'success': True,
+        'roomId': current_room_id,
+        'partnerId': str(partner_id),
+        'partnerNickname': partner_nickname,
+        'count': len(parsed_list),
+        'hasNew': len(parsed_list) > 0,
+        'lastMessageId': last_id,
+        'messages': parsed_list
+    }, ensure_ascii=False)
+
+def get_private_messages(user_id=None, since_id=None, limit=20):
+    return get_room_messages(room_id=None, since_id=since_id, limit=limit, user_id=user_id)
+
 def netease_launch():
     error = _require_macos_client()
     if error:
@@ -1624,6 +1748,9 @@ TOOLS = [
     {"name": "send_private_message", "description": "Send a private text message to a NetEase user ID. If user_id is omitted, automatically delivers to the partner in the current Listen Together room or configured account.", "inputSchema": {"type": "object", "properties": {"content": {"type": "string", "description": "Text message content", "minLength": 1}, "user_id": {"type": ["integer", "string"], "description": "Optional numeric NetEase user ID"}}, "required": ["content"]}},
     {"name": "send_room_bubble", "description": "Send a message in the current Listen Together room (broadcasts to room and delivers directly to partner's NetEase mobile app notifications and chat drawer).", "inputSchema": {"type": "object", "properties": {"content": {"type": "string", "description": "Message content", "minLength": 1}}, "required": ["content"]}},
     {"name": "send_room_message", "description": "Send a message to the partner in the current NetEase Listen Together room. Automatically resolves partner's account; guaranteed delivery to partner's phone notifications and playback chat drawer.", "inputSchema": {"type": "object", "properties": {"content": {"type": "string", "description": "Message content", "minLength": 1}, "user_id": {"type": ["integer", "string"], "description": "Optional numeric NetEase user ID"}}, "required": ["content"]}},
+    {"name": "get_room_messages", "description": "Read conversation messages in the current NetEase Listen Together room. Supports incremental reading by passing since_id (returns only new messages after since_id) or fetching the latest N messages (limit).", "inputSchema": {"type": "object", "properties": {"since_id": {"type": ["string", "integer"], "description": "Optional ID of the last message read. When provided, returns only new messages after this ID for incremental reading."}, "limit": {"type": "integer", "description": "Number of recent messages to return (default 20, max 100).", "default": 20}, "room_id": {"type": "string", "description": "Optional Listen Together room ID. Automatically resolved if omitted."}}}},
+    {"name": "read_room_messages", "description": "Alias for get_room_messages. Read messages in the current NetEase Listen Together room / private chat with partner.", "inputSchema": {"type": "object", "properties": {"since_id": {"type": ["string", "integer"], "description": "Optional last message ID read previously."}, "limit": {"type": "integer", "description": "Number of recent messages to return.", "default": 20}, "room_id": {"type": "string", "description": "Optional Listen Together room ID."}}}},
+    {"name": "get_private_messages", "description": "Read private messages history with a NetEase user. If user_id is omitted, automatically reads the conversation with the partner in the current Listen Together room.", "inputSchema": {"type": "object", "properties": {"user_id": {"type": ["integer", "string"], "description": "Optional numeric NetEase user ID."}, "since_id": {"type": ["string", "integer"], "description": "Optional last message ID for incremental reading."}, "limit": {"type": "integer", "description": "Number of messages to return (default 20).", "default": 20}}}},
     {"name": "netease_launch", "description": "Launch the official NetEase Music macOS client.", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "netease_listen_together_capabilities", "description": "Report what Listen Together can and cannot do through this MCP.", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "netease_listen_together_control", "description": "Directly report a low-level Listen Together room playback command. NEXT/PREVIOUS/GOTO require ids=[formerSongId,targetSongId]; position is seconds and play_status is 0=stopped, 1=paused, 2=playing.", "inputSchema": {"type": "object", "properties": {"command": {"type": "string", "enum": ["PLAY", "PAUSE", "NEXT", "PREVIOUS", "PROGRESS", "GOTO"]}, "ids": {"type": "array", "items": {"type": ["integer", "string"]}, "minItems": 2, "maxItems": 2}, "position": {"type": "number", "minimum": 0}, "play_status": {"type": "integer", "enum": [0, 1, 2]}}, "required": ["command"]}},
@@ -1696,6 +1823,19 @@ def handle_jsonrpc(body):
             text = send_room_message(
                 args.get('content', ''),
                 args.get('user_id'),
+            )
+        elif name in ('get_room_messages', 'read_room_messages'):
+            text = get_room_messages(
+                args.get('room_id'),
+                args.get('since_id'),
+                args.get('limit', 20),
+                args.get('user_id'),
+            )
+        elif name == 'get_private_messages':
+            text = get_private_messages(
+                args.get('user_id'),
+                args.get('since_id'),
+                args.get('limit', 20),
             )
         elif name == 'netease_launch':
             text = netease_launch()
