@@ -1,0 +1,10 @@
+services:
+  netease-listen-together:
+    build: .
+    container_name: netease-listen-together
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      # 可根据需要修改本地映射端口（如 127.0.0.1:8006:8000 或 127.0.0.1:8000:8000）
+      - "127.0.0.1:8006:8000"

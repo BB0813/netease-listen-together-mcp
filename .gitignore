@@ -21,6 +21,9 @@ venv/
 *.sqlite
 *.sqlite3
 *.db
+*.bak
+*.tmp
+*.swp
 
 # Editors and macOS
 .DS_Store

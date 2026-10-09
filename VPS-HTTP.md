@@ -6,9 +6,7 @@
 
 本文整理 VPS-HTTP 方案的实现思路、关键接口流程和踩坑记录，供需要适配无桌面环境的用户参考。文中示例基于 HTTP 接口封装思路整理，`netease_request`、`get_csrf`、`get_room_state`、`report_list`、`report_play` 等为示例中的辅助封装，用于说明如何构造对应请求，调用方式见详解。
 
-> 本文是方案参考，不代表当前仓库已经集成了该方案。能力以 HTTP API 实际可用接口为准。
-
-> 使用 VPS 环境时，需要根据自己的 MCP 框架或应用结构，将本文中的 HTTP 请求流程封装并接入对应的工具调用逻辑；当前仓库的 `server.py` 仍主要面向桌面客户端 + CDP 方案。
+> **更新说明**：本项目（`BB0813/netease-listen-together-mcp`）已经在 `server.py` 中原生集成了该纯 HTTP 方案！在 Linux / Docker 环境下自动无缝启用，无需额外适配或安装桌面客户端，开箱即用。
 
 ## 1. 适用场景
 

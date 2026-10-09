@@ -139,7 +139,17 @@ def _netease_cdp_target():
         None,
     )
 
+def _can_use_cdp():
+    if sys.platform != 'darwin':
+        return False
+    try:
+        return _netease_cdp_target() is not None or _ensure_netease_debug_client() is None
+    except Exception:
+        return False
+
 def _ensure_netease_debug_client():
+    if sys.platform != 'darwin':
+        return 'NetEase debug client requires macOS.'
     if _netease_cdp_target():
         return None
     if subprocess.run(
@@ -484,6 +494,23 @@ def netease_launch():
     return 'NetEase Music launched.' if ok else 'Could not launch NetEase Music: ' + detail
 
 def netease_listen_together_capabilities():
+    if not _can_use_cdp():
+        st = _get_listen_together_http_status()
+        return json.dumps({
+            'supported': True,
+            'mode': 'http',
+            'inRoom': bool(st.get('inRoom')),
+            'roomId': st.get('roomId'),
+            'canOpenInviteEntry': False,
+            'canCreateShareLink': False,
+            'canSendNativeInvite': False,
+            'canLeaveTogether': True,
+            'canPlaybackControl': bool(st.get('inRoom')),
+            'canAddSong': bool(st.get('inRoom')),
+            'canSwitchSong': bool(st.get('inRoom')),
+            'synchronizedPlayback': 'provided_by_http_api',
+            'message': 'HTTP 模式正常运行。' + ('当前处于一起听房间中。' if st.get('inRoom') else '当前未在房间中，请在手机端发起邀请。'),
+        }, ensure_ascii=False)
     return json.dumps({
         'supported': sys.platform == 'darwin' and os.path.isdir(NETEASE_APP_PATH),
         'canOpenInviteEntry': True,
@@ -634,6 +661,14 @@ def netease_listen_together_invite():
     }, ensure_ascii=False)
 
 def netease_listen_together_leave():
+    if not _can_use_cdp():
+        st = _get_listen_together_http_status()
+        if not st.get('inRoom') or not st.get('roomId'):
+            return json.dumps({'success': True, 'alreadyLeft': True, 'message': 'Not currently listening together.'}, ensure_ascii=False)
+        csrf = get_csrf()
+        url = 'https://music.163.com/api/listen/together/end/v2?csrf_token=' + urllib.parse.quote(csrf)
+        res = netease_request(url, {'roomId': st['roomId'], 'shareInfo': '{}', 'csrf_token': csrf})
+        return json.dumps({'success': res.get('code') == 200, 'roomId': st['roomId'], 'message': 'Left Listen Together room.'}, ensure_ascii=False)
     error = _require_macos_client()
     if error:
         return error
@@ -680,6 +715,8 @@ def _netease_playback_control(command, ids=None, position=None, play_status=None
     room_commands = {'PLAY', 'PAUSE', 'PROGRESS', 'NEXT', 'PREVIOUS', 'GOTO'}
     if command not in local_commands | room_commands:
         return json.dumps({'success': False, 'message': 'Unsupported command.'}, ensure_ascii=False)
+    if not _can_use_cdp():
+        return _http_playback_control(command, ids, position, play_status)
     error = _ensure_netease_debug_client()
     if error:
         return json.dumps({'success': False, 'message': error}, ensure_ascii=False)
@@ -829,6 +866,44 @@ def get_current_listening_context():
                     }, ensure_ascii=False)
         except Exception:
             pass
+        try:
+            st = _get_listen_together_http_status()
+            if st.get('inRoom') and st.get('roomId'):
+                state = _get_room_state(st['roomId'])
+                play_cmd = state.get('playCommand') or {}
+                cur_song_id = play_cmd.get('targetSongId')
+                if cur_song_id:
+                    detail = netease_request('https://music.163.com/api/song/detail?ids=[' + str(cur_song_id) + ']')
+                    tracks = detail.get('songs') or []
+                    if tracks:
+                        cur_s = tracks[0]
+                        title = cur_s.get('name') or ''
+                        artist = ', '.join(a.get('name', '') for a in cur_s.get('artists', []))
+                        album = (cur_s.get('album') or {}).get('name') or ''
+                        duration = float(cur_s.get('duration') or 0) / 1000
+                        elapsed = float(play_cmd.get('progress') or 0) / 1000
+                        timeline = get_lyric_timeline(cur_song_id)
+                        nearby = []
+                        if timeline:
+                            cur_idx = max(0, bisect.bisect_right([item[0] for item in timeline], elapsed) - 1)
+                            nearby = [
+                                {'time': round(sec, 3), 'text': text, 'current': idx == cur_idx, 'replyTarget': idx == min(cur_idx + 2, len(timeline) - 1)}
+                                for idx, (sec, text) in enumerate(timeline[cur_idx:cur_idx + 6], cur_idx)
+                            ]
+                        return json.dumps({
+                            'success': True,
+                            'songId': cur_song_id,
+                            'title': title,
+                            'artist': artist,
+                            'album': album,
+                            'elapsedTime': round(elapsed, 3),
+                            'duration': round(duration, 3),
+                            'nearbyLyrics': nearby,
+                            'playing': play_cmd.get('playStatus') == 'PLAY',
+                            'roomPlayback': True
+                        }, ensure_ascii=False)
+        except Exception:
+            pass
         return json.dumps({'success': False, 'message': error}, ensure_ascii=False)
     song_id = find_local_song_id(info) or search_song_id(info)
     if not song_id:
@@ -891,6 +966,271 @@ def get_csrf():
             return part.split('=', 1)[1]
     return ''
 
+def _get_listen_together_http_status():
+    csrf = get_csrf()
+    url = 'https://music.163.com/api/listen/together/status/get?csrf_token=' + urllib.parse.quote(csrf)
+    res = netease_request(url, {'csrf_token': csrf})
+    data = res.get('data') or {}
+    room_info = data.get('roomInfo') or {}
+    return {
+        'inRoom': bool(data.get('inRoom')),
+        'roomId': room_info.get('roomId'),
+        'creatorId': room_info.get('creatorId'),
+        'status': data.get('status'),
+        'roomUsers': room_info.get('roomUsers') or [],
+        'data': data
+    }
+
+def _accept_latest_invitation():
+    csrf = get_csrf()
+    acceptor_id = NETEASE_LISTEN_TOGETHER_ACCEPTOR_ID
+    if not acceptor_id:
+        return False, "NETEASE_LISTEN_TOGETHER_ACCEPTOR_ID 未配置"
+    url = 'https://music.163.com/api/msg/private/history?csrf_token=' + urllib.parse.quote(csrf)
+    res = netease_request(url, {'userId': str(acceptor_id), 'limit': '10', 'csrf_token': csrf})
+    msgs = res.get('msgs', [])
+    for m in msgs:
+        try:
+            msg_obj = json.loads(m.get('msg', '{}'))
+            if msg_obj.get('type') == 23:
+                native_url = (msg_obj.get('generalMsg') or {}).get('nativeUrl', '')
+                if 'roomId=' in native_url and 'inviterId=' in native_url:
+                    parsed = urllib.parse.urlparse(native_url)
+                    qs = urllib.parse.parse_qs(parsed.query)
+                    if 'url1' in qs:
+                        sub_qs = urllib.parse.parse_qs(urllib.parse.urlparse(qs['url1'][0]).query)
+                        room_id = sub_qs.get('roomId', [''])[0]
+                        inviter_id = sub_qs.get('inviterId', [''])[0]
+                    else:
+                        room_id = qs.get('roomId', [''])[0]
+                        inviter_id = qs.get('inviterId', [''])[0]
+                    if room_id and inviter_id:
+                        acc_url = 'https://music.163.com/api/listen/together/play/invitation/accept?csrf_token=' + urllib.parse.quote(csrf)
+                        acc_res = netease_request(acc_url, {'roomId': str(room_id), 'inviterId': str(inviter_id), 'csrf_token': csrf})
+                        if acc_res.get('code') == 200:
+                            return True, f"已自动接受房间 {room_id} 的一起听邀请（邀请人: {inviter_id}）"
+        except Exception:
+            pass
+    return False, "近期私信中未找到有效的一起听邀请卡片"
+
+def _get_room_state(room_id):
+    csrf = get_csrf()
+    url = 'https://music.163.com/api/listen/together/sync/playlist/get?csrf_token=' + urllib.parse.quote(csrf)
+    res = netease_request(url, {'roomId': str(room_id), 'csrf_token': csrf})
+    if res.get('code') != 200:
+        raise RuntimeError('sync/playlist/get failed: ' + str(res))
+    return res.get('data') or {}
+
+def _report_list_command(room_id, command):
+    csrf = get_csrf()
+    url = 'https://music.163.com/api/listen/together/sync/list/command/report?csrf_token=' + urllib.parse.quote(csrf)
+    payload = {
+        'roomId': str(room_id),
+        'commandInfo': json.dumps(command, ensure_ascii=False, separators=(',', ':')),
+        'csrf_token': csrf,
+    }
+    res = netease_request(url, payload)
+    if res.get('code') != 200 or not (res.get('data') or {}).get('result'):
+        raise RuntimeError('sync/list/command/report failed: ' + str(res))
+    return res
+
+def _report_play_command(room_id, command):
+    csrf = get_csrf()
+    url = 'https://music.163.com/api/listen/together/play/command/report?csrf_token=' + urllib.parse.quote(csrf)
+    payload = {
+        'roomId': str(room_id),
+        'commandInfo': json.dumps(command, ensure_ascii=False, separators=(',', ':')),
+        'csrf_token': csrf,
+    }
+    res = netease_request(url, payload)
+    if res.get('code') != 200 or not (res.get('data') or {}).get('result'):
+        raise RuntimeError('play/command/report failed: ' + str(res))
+    return res
+
+def _http_play_music(s, song_id, note=None):
+    st = _get_listen_together_http_status()
+    if not st.get('inRoom') or not st.get('roomId'):
+        ok, msg = _accept_latest_invitation()
+        if ok:
+            time.sleep(1)
+            st = _get_listen_together_http_status()
+        if not st.get('inRoom') or not st.get('roomId'):
+            return (
+                "当前未加入「一起听」房间。在 Linux 纯 HTTP 模式下，请先在手机网易云 App 中发起「一起听」并邀请当前账号入房。"
+            )
+    room_id = st['roomId']
+    state = _get_room_state(room_id)
+    play_command = state.get('playCommand') or {}
+    playlist = state.get('playlist') or {}
+
+    former = str(play_command.get('targetSongId') or '')
+    seq = int(play_command.get('clientSeq', 0))
+    versions = [dict(v) for v in playlist.get('version', [])]
+    play_mode = playlist.get('playMode', 'ORDER_LOOP')
+
+    display_items = playlist.get('displayList', {}).get('result', [])
+    display_list = [
+        str(item.get('songId') if isinstance(item, dict) else item)
+        for item in display_items
+    ]
+    current_index = display_list.index(former) if former in display_list else 0
+    target = str(song_id)
+
+    my_uid = get_uid()
+    for v in versions:
+        if str(v.get('userId')) == str(my_uid):
+            v['version'] = int(v.get('version', 0)) + 1
+            break
+    else:
+        if my_uid:
+            versions.append({'userId': int(my_uid), 'version': 1})
+
+    added_ok = True
+    if target not in display_list:
+        try:
+            _report_list_command(room_id, {
+                'commandType': 'ADD',
+                'version': versions,
+                'playMode': play_mode,
+                'anchorSongId': former,
+                'anchorPosition': current_index,
+                'randomList': [target],
+                'displayList': [target],
+            })
+            time.sleep(1.0)
+        except Exception as e:
+            added_ok = False
+
+    try:
+        _report_play_command(room_id, {
+            'commandType': 'GOTO',
+            'progress': 0,
+            'playStatus': 'PLAY',
+            'formerSongId': former,
+            'targetSongId': target,
+            'clientSeq': seq + 1,
+        })
+    except Exception as e:
+        if not added_ok:
+            return (
+                f"切歌未能生效：目标歌曲未在房间当前播放列表中（当前房间列表已达 1000 首上限或仅房主可加歌）。\n"
+                f"建议先在手机端将此歌《{s.get('name', '')}》加入房间播放列表后再点歌。"
+            )
+        return f"切歌失败: {e}"
+
+    pic_url = (s.get('album') or {}).get('picUrl', '')
+    name = s.get('name', '').replace(':', '：')
+    artist = ', '.join([a.get('name', '') for a in s.get('artists', [])]).replace(':', '：')
+    link = "https://music.163.com/song?id=" + str(song_id)
+    return (
+        '已在网易云「一起听」房间中切歌播放：\n'
+        + "[music:" + str(song_id) + ":" + name + ":" + artist + ":" + pic_url + "]"
+        + (note or '') + "\n" + link
+    )
+
+def _http_playback_control(command, ids=None, position=None, play_status=None):
+    st = _get_listen_together_http_status()
+    if not st.get('inRoom') or not st.get('roomId'):
+        return json.dumps({
+            'success': False,
+            'message': '当前未在「一起听」房间中，无法执行播放控制。'
+        }, ensure_ascii=False)
+    room_id = st['roomId']
+    state = _get_room_state(room_id)
+    play_command = state.get('playCommand') or {}
+    playlist = state.get('playlist') or {}
+    former = str(play_command.get('targetSongId') or '')
+    seq = int(play_command.get('clientSeq', 0))
+
+    display_items = playlist.get('displayList', {}).get('result', [])
+    display_list = [
+        str(item.get('songId') if isinstance(item, dict) else item)
+        for item in display_items
+    ]
+    current_index = display_list.index(former) if former in display_list else 0
+
+    cmd = command.upper()
+    if cmd in ('PLAY', 'RESUME'):
+        _report_play_command(room_id, {
+            'commandType': 'PLAY',
+            'progress': int(position or play_command.get('progress') or 0),
+            'playStatus': 'PLAY',
+            'formerSongId': former,
+            'targetSongId': former,
+            'clientSeq': seq + 1,
+        })
+        return json.dumps({'success': True, 'command': command}, ensure_ascii=False)
+    elif cmd in ('PAUSE', 'STOP'):
+        _report_play_command(room_id, {
+            'commandType': 'PAUSE',
+            'progress': int(position or play_command.get('progress') or 0),
+            'playStatus': 'PAUSE',
+            'formerSongId': former,
+            'targetSongId': former,
+            'clientSeq': seq + 1,
+        })
+        return json.dumps({'success': True, 'command': command}, ensure_ascii=False)
+    elif cmd in ('NEXT',):
+        if not display_list:
+            return json.dumps({'success': False, 'message': '播放列表为空'}, ensure_ascii=False)
+        target = display_list[(current_index + 1) % len(display_list)]
+        _report_play_command(room_id, {
+            'commandType': 'GOTO',
+            'progress': 0,
+            'playStatus': 'PLAY',
+            'formerSongId': former,
+            'targetSongId': target,
+            'clientSeq': seq + 1,
+        })
+        return json.dumps({'success': True, 'command': 'NEXT', 'targetSongId': target}, ensure_ascii=False)
+    elif cmd in ('PREVIOUS', 'PREV'):
+        if not display_list:
+            return json.dumps({'success': False, 'message': '播放列表为空'}, ensure_ascii=False)
+        target = display_list[(current_index - 1) % len(display_list)]
+        _report_play_command(room_id, {
+            'commandType': 'GOTO',
+            'progress': 0,
+            'playStatus': 'PLAY',
+            'formerSongId': former,
+            'targetSongId': target,
+            'clientSeq': seq + 1,
+        })
+        return json.dumps({'success': True, 'command': 'PREVIOUS', 'targetSongId': target}, ensure_ascii=False)
+    elif cmd == 'GOTO':
+        target = str(ids[1]) if ids and len(ids) == 2 else (str(ids[0]) if ids else former)
+        _report_play_command(room_id, {
+            'commandType': 'GOTO',
+            'progress': int(position or 0),
+            'playStatus': 'PLAY',
+            'formerSongId': former,
+            'targetSongId': target,
+            'clientSeq': seq + 1,
+        })
+        return json.dumps({'success': True, 'command': 'GOTO', 'targetSongId': target}, ensure_ascii=False)
+    elif cmd == 'PROGRESS':
+        _report_play_command(room_id, {
+            'commandType': 'PROGRESS',
+            'progress': int(position or 0),
+            'playStatus': 'PLAY' if play_status != 1 else 'PAUSE',
+            'formerSongId': former,
+            'targetSongId': former,
+            'clientSeq': seq + 1,
+        })
+        return json.dumps({'success': True, 'command': 'PROGRESS'}, ensure_ascii=False)
+    else:
+        return json.dumps({'success': False, 'message': f'不支持的指令: {command}'}, ensure_ascii=False)
+
+def netease_listen_together_accept(room_id=None, inviter_id=None):
+    if room_id and inviter_id:
+        csrf = get_csrf()
+        acc_url = 'https://music.163.com/api/listen/together/play/invitation/accept?csrf_token=' + urllib.parse.quote(csrf)
+        acc_res = netease_request(acc_url, {'roomId': str(room_id), 'inviterId': str(inviter_id), 'csrf_token': csrf})
+        if acc_res.get('code') == 200:
+            return json.dumps({'success': True, 'roomId': str(room_id), 'inviterId': str(inviter_id), 'message': '成功接受一起听邀请！'}, ensure_ascii=False)
+        return json.dumps({'success': False, 'message': acc_res.get('message') or '接受邀请失败', 'response': acc_res}, ensure_ascii=False)
+    ok, msg = _accept_latest_invitation()
+    return json.dumps({'success': ok, 'message': msg}, ensure_ascii=False)
+
 def play_music(query='', note=None, artist=None, song_id=None):
     if song_id:
         song_id = _validate_numeric_id(song_id)
@@ -951,6 +1291,8 @@ def play_music(query='', note=None, artist=None, song_id=None):
     if not tracks:
         return 'Could not load the selected song details.'
     s = tracks[0]
+    if not _can_use_cdp():
+        return _http_play_music(s, song_id, note)
     debug_error = _ensure_netease_debug_client()
     if debug_error:
         return 'Could not control NetEase Music: ' + debug_error
@@ -1202,7 +1544,8 @@ TOOLS = [
     {"name": "netease_listen_together_capabilities", "description": "Report what Listen Together can and cannot do through this MCP.", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "netease_listen_together_control", "description": "Directly report a low-level Listen Together room playback command. NEXT/PREVIOUS/GOTO require ids=[formerSongId,targetSongId]; position is seconds and play_status is 0=stopped, 1=paused, 2=playing.", "inputSchema": {"type": "object", "properties": {"command": {"type": "string", "enum": ["PLAY", "PAUSE", "NEXT", "PREVIOUS", "PROGRESS", "GOTO"]}, "ids": {"type": "array", "items": {"type": ["integer", "string"]}, "minItems": 2, "maxItems": 2}, "position": {"type": "number", "minimum": 0}, "play_status": {"type": "integer", "enum": [0, 1, 2]}}, "required": ["command"]}},
     {"name": "netease_listen_together_invite", "description": "Create and activate a Listen Together room with no manual interaction, then send a native NetEase invitation to the configured acceptor account.", "inputSchema": {"type": "object", "properties": {}}},
-    {"name": "netease_listen_together_leave", "description": "Leave the current Listen Together room without restarting the NetEase Music client.", "inputSchema": {"type": "object", "properties": {}}}
+    {"name": "netease_listen_together_leave", "description": "Leave the current Listen Together room without restarting the NetEase Music client.", "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "netease_listen_together_accept", "description": "Accept an incoming Listen Together invitation from NetEase Music, or automatically accept the latest invitation received in private messages.", "inputSchema": {"type": "object", "properties": {"room_id": {"type": "string", "description": "Optional room ID"}, "inviter_id": {"type": ["integer", "string"], "description": "Optional numeric inviter user ID"}}}}
 ]
 
 def handle_jsonrpc(body):
@@ -1271,6 +1614,8 @@ def handle_jsonrpc(body):
             text = netease_listen_together_invite()
         elif name == 'netease_listen_together_leave':
             text = netease_listen_together_leave()
+        elif name == 'netease_listen_together_accept':
+            text = netease_listen_together_accept(args.get('room_id'), args.get('inviter_id'))
         else:
             text = "Unknown tool: " + name
         return {"jsonrpc": "2.0", "id": req_id, "result": {"content": [{"type": "text", "text": text}]}}

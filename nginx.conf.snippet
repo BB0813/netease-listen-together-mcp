@@ -1,0 +1,21 @@
+# Nginx 反向代理配置示例（带 Bearer Token 鉴权防护）
+location ^~ /netease-mcp/ {
+    # 鉴权 Token 校验（将下面的 your_secret_token 替换为您的 MCP_AUTH_TOKEN）
+    set $auth_ok 0;
+    if ($http_authorization ~* "your_secret_token") {
+        set $auth_ok 1;
+    }
+    if ($auth_ok = 0) {
+        return 403;
+    }
+
+    proxy_pass http://127.0.0.1:8006/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header Connection "";
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_buffering off;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+}

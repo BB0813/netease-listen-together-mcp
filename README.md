@@ -80,35 +80,51 @@
 - 可接受已有一起听邀请，并在房间中读取列表、加歌和切歌
 - 无法仅依赖 HTTP API 创建并维持可正常加入的一起听房间
 
-> [!IMPORTANT]
-> 当前仓库默认实现为 macOS 桌面客户端 + CDP 方案。VPS 无桌面环境使用时，需要在克隆仓库后参考 [VPS-HTTP.md](VPS-HTTP.md) 对一起听相关功能进行 HTTP API 适配。
+> [!TIP]
+> **Linux / VPS / Docker 开箱即用支持**：
+> 本版本已原生打通 Linux 纯 HTTP 一起听信令支持！在无桌面/Linux 环境下，服务会自动切换为网易云原生 HTTP 模式：当处于「一起听」房间中时，支持直接通过 HTTP API 选歌、切歌、暂停、继续并实时提取歌词，无需安装网易云客户端或浏览器，完美适配 NAS/VPS 容器化 7×24 小时运行。
 
 两种模式的实现路径不同：
-- 桌面客户端模式通过 CDP 调用网易云客户端内部 action，由客户端完成一起听状态同步。
-- HTTP API 模式不依赖网易云客户端，直接调用一起听相关 HTTP 接口操作房间状态。
+- 桌面客户端模式（macOS）：通过 CDP 调用网易云客户端内部 action，由客户端完成一起听状态同步。
+- HTTP API 模式（Linux / VPS / Docker）：不依赖网易云桌面客户端，直接调用一起听官方 HTTP 接口上报播放控制与状态同步。
 
 ## 实测环境与适配范围
 
-下面只是当前版本的实测环境，不代表只能在相同环境运行：
-
 | 项目 | 实测版本 |
 |---|---|
-| macOS | 14.7.1（23H222） |
-| Python | 3.9.6 |
-| Node.js | 24.15.0 |
-| 网易云音乐客户端 | 3.1.8 |
-| MCP 传输 | stdio / JSON-RPC |
-
-- 网络接口部分只使用 Python 标准库，可在 macOS、Linux 或 VPS 上运行。
-- CDP 桌面控制实现在 macOS 网易云客户端上完成验证；Windows Electron 客户端可按相同思路适配，但需要重新确认启动方式、模块号和本地播放状态读取方式。
-- 纯 HTTP 的 VPS 方案不需要安装浏览器或网易云客户端，目前支持作为被邀请方接受有效一起听邀请，并在房间中读取列表、加歌和切歌。
+| macOS | 14.7.1（23H222）+ 官方客户端 CDP 模式 |
+| Linux / NAS / VPS | Debian 12 / Docker 容器化（HTTP 原生模式） |
+| Python | 3.9+ / 3.11 |
+| MCP 传输 | stdio / JSON-RPC 以及 streamable-http（配合 supergateway） |
 
 ## 安装与配置
+
+### 方式一：Docker 部署（推荐用于 Linux / NAS / VPS）
+
+直接使用仓库自带的 Docker 配置，一步启动 streamable-http 服务：
+
+```bash
+git clone https://github.com/BB0813/netease-listen-together-mcp.git
+cd netease-listen-together-mcp
+
+# 复制配置文件模板
+cp .env.example .env
+# 编辑 .env 填入你的 NETEASE_COOKIE 与 NETEASE_LISTEN_TOGETHER_ACCEPTOR_ID
+chmod 600 .env
+
+# 构建并启动容器
+docker compose up -d
+```
+
+服务将自动通过 `supergateway` 暴露 `http://127.0.0.1:8006/mcp`（streamable-http 模式）。
+如需公网安全访问，可配合仓库提供的 `nginx.conf.snippet` 启用 HTTPS 与 Bearer Token 鉴权。
+
+### 方式二：本机运行（macOS 桌面客户端 或 Linux 本地）
 
 克隆仓库：
 
 ```bash
-git clone https://github.com/zbqbbm/netease-listen-together-mcp.git
+git clone https://github.com/BB0813/netease-listen-together-mcp.git
 cd netease-listen-together-mcp
 ```
 
