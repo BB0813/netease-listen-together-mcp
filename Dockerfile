@@ -8,6 +8,9 @@ RUN npm install -g --registry=https://registry.npmmirror.com supergateway
 
 WORKDIR /app
 
+COPY package.json /app/
+RUN npm install --registry=https://registry.npmmirror.com --omit=dev
+
 COPY . /app/
 
 RUN python3 -m py_compile /app/server.py

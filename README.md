@@ -212,11 +212,13 @@ HTTP API 与 CDP 分别承担服务端账号能力和桌面客户端控制，不
 - `netease_listen_together_control`
 - `netease_listen_together_leave`
 
-### 评论与私信
+### 评论、私信与房间发信
 
 - `get_song_comments`
 - `send_song_comment`
-- `send_private_message`
+- `send_private_message` (网易云私信，支持自动寻址房间好友)
+- `send_room_bubble` (网易云「一起听」播放界面实时漂浮气泡文字)
+- `send_room_message` (智能房间发信，优先发送房间飘字气泡)
 
 ## 验证
 

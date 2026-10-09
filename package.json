@@ -1,0 +1,10 @@
+{
+  "name": "netease-listen-together-mcp",
+  "version": "1.2.0",
+  "description": "NetEase Cloud Music Listen Together MCP Server",
+  "main": "send_bubble.cjs",
+  "dependencies": {
+    "@yxim/nim-web-sdk": "^9.21.18",
+    "ws": "^8.18.0"
+  }
+}
