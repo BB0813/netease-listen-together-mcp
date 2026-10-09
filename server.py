@@ -452,16 +452,31 @@ def send_song_comment(song_id, content):
         'message': response.get('message') or response.get('error') or 'Unknown error',
     }, ensure_ascii=False)
 
-def send_private_message(user_id, content):
+def send_private_message(user_id=None, content=''):
     if not NETEASE_COOKIE:
         return 'Private message not sent: NETEASE_COOKIE is not configured.'
+    content = str(content or '').strip()
+    if not content:
+        return 'Private message content cannot be empty.'
+    if not user_id:
+        try:
+            st = _get_listen_together_http_status()
+            my_uid = get_uid()
+            for u in st.get('roomUsers', []):
+                if str(u.get('userId')) != str(my_uid):
+                    user_id = str(u.get('userId'))
+                    break
+        except Exception:
+            pass
+    if not user_id and NETEASE_LISTEN_TOGETHER_ACCEPTOR_ID:
+        user_id = str(NETEASE_LISTEN_TOGETHER_ACCEPTOR_ID)
+    if not user_id:
+        return 'Missing user_id: 请提供目标网易云用户数字 ID，或在加入一起听房间后发送。'
     try:
         user_id = _validate_numeric_id(user_id)
     except ValueError as exc:
         return str(exc)
-    content = str(content or '').strip()
-    if not content:
-        return 'Private message content cannot be empty.'
+
     csrf = get_csrf()
     response = netease_request(
         'https://music.163.com/api/msg/private/send?csrf_token='
@@ -486,6 +501,9 @@ def send_private_message(user_id, content):
         'message': response.get('message') or response.get('error') or 'Unknown error',
     }, ensure_ascii=False)
 
+def send_room_message(content, user_id=None):
+    return send_private_message(user_id=user_id, content=content)
+
 def netease_launch():
     error = _require_macos_client()
     if error:
@@ -508,6 +526,9 @@ def netease_listen_together_capabilities():
             'canPlaybackControl': bool(st.get('inRoom')),
             'canAddSong': bool(st.get('inRoom')),
             'canSwitchSong': bool(st.get('inRoom')),
+            'canSendMessage': True,
+            'mcpTextChat': True,
+            'messageDelivery': 'send_room_message / send_private_message (推送至网易云私信与手机锁屏通知)',
             'synchronizedPlayback': 'provided_by_http_api',
             'message': 'HTTP 模式正常运行。' + ('当前处于一起听房间中。' if st.get('inRoom') else '当前未在房间中，请在手机端发起邀请。'),
         }, ensure_ascii=False)
@@ -1539,7 +1560,8 @@ TOOLS = [
     {"name": "netease_lyrics", "description": "Get original, translated, and romanized lyrics for a NetEase song ID.", "inputSchema": {"type": "object", "properties": {"song_id": {"type": ["integer", "string"]}}, "required": ["song_id"]}},
     {"name": "get_song_comments", "description": "Read normalized public comments for a NetEase song. Login is not required.", "inputSchema": {"type": "object", "properties": {"song_id": {"type": ["integer", "string"]}, "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20}, "offset": {"type": "integer", "minimum": 0, "default": 0}}, "required": ["song_id"]}},
     {"name": "send_song_comment", "description": "Publish a public comment on a NetEase song. This is an external write action; call it only when the user has explicitly requested or authorized the comment.", "inputSchema": {"type": "object", "properties": {"song_id": {"type": ["integer", "string"]}, "content": {"type": "string", "minLength": 1, "maxLength": 140}}, "required": ["song_id", "content"]}},
-    {"name": "send_private_message", "description": "Send a private text message to a NetEase user ID. This is an external write action; call it only when the user has explicitly requested or authorized the message.", "inputSchema": {"type": "object", "properties": {"user_id": {"type": ["integer", "string"], "description": "Numeric NetEase user ID"}, "content": {"type": "string", "minLength": 1}}, "required": ["user_id", "content"]}},
+    {"name": "send_private_message", "description": "Send a private text message to a NetEase user ID. If user_id is omitted, automatically delivers to the partner in the current Listen Together room or configured account.", "inputSchema": {"type": "object", "properties": {"content": {"type": "string", "description": "Text message content", "minLength": 1}, "user_id": {"type": ["integer", "string"], "description": "Optional numeric NetEase user ID"}}, "required": ["content"]}},
+    {"name": "send_room_message", "description": "Send a text message to the other user in the current NetEase Listen Together room (sent via NetEase private message which delivers directly to the user's phone with lock-screen notification). User ID is resolved automatically if omitted.", "inputSchema": {"type": "object", "properties": {"content": {"type": "string", "description": "Text message content to send to room partner", "minLength": 1}, "user_id": {"type": ["integer", "string"], "description": "Optional numeric NetEase user ID"}}, "required": ["content"]}},
     {"name": "netease_launch", "description": "Launch the official NetEase Music macOS client.", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "netease_listen_together_capabilities", "description": "Report what Listen Together can and cannot do through this MCP.", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "netease_listen_together_control", "description": "Directly report a low-level Listen Together room playback command. NEXT/PREVIOUS/GOTO require ids=[formerSongId,targetSongId]; position is seconds and play_status is 0=stopped, 1=paused, 2=playing.", "inputSchema": {"type": "object", "properties": {"command": {"type": "string", "enum": ["PLAY", "PAUSE", "NEXT", "PREVIOUS", "PROGRESS", "GOTO"]}, "ids": {"type": "array", "items": {"type": ["integer", "string"]}, "minItems": 2, "maxItems": 2}, "position": {"type": "number", "minimum": 0}, "play_status": {"type": "integer", "enum": [0, 1, 2]}}, "required": ["command"]}},
@@ -1603,6 +1625,11 @@ def handle_jsonrpc(body):
             text = send_private_message(
                 args.get('user_id'),
                 args.get('content', ''),
+            )
+        elif name == 'send_room_message':
+            text = send_room_message(
+                args.get('content', ''),
+                args.get('user_id'),
             )
         elif name == 'netease_launch':
             text = netease_launch()
